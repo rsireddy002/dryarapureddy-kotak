@@ -28,6 +28,8 @@ def render_sidebar():
     with st.sidebar:
         st.markdown("**Kotak live feed**")
         st.caption(kotak_feed.STATUS.get("msg", ""))
+        st.caption("check: " + ", ".join(k.replace("KOTAK_", "") + "=" + ("yes" if os.environ.get(k) else "no") for k in _KEYS)
+                   + " | thread alive=" + str(_start_thread().is_alive()))
         if not os.environ.get("KOTAK_TOTP_SECRET"):
             code = st.text_input("Kotak TOTP (6 digits)", max_chars=6, key="kotak_totp_input")
             if code and len(code) == 6 and code.isdigit():
