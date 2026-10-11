@@ -1912,7 +1912,18 @@ def run_live_scan(cache, token):
     # redeploy) that was hundreds of sequential API calls and left the page blank for minutes.
     _t_p0 = time.time()
     try:
-        prefetch_candles([c_["instrument_key"] for c_ in cache.values() if c_.get("instrument_key")], token)
+        # Skip symbols the live (Kotak) feed already covers -- they never need the slow REST history call.
+        _need = []
+        for _s_, c_ in cache.items():
+            if not c_.get("instrument_key"):
+                continue
+            try:
+                _lv = get_live_candles(_s_, interval=str(CANDLE_INTERVAL_MINUTES))
+            except Exception:
+                _lv = None
+            if _lv is None or _lv.empty:
+                _need.append(c_["instrument_key"])
+        prefetch_candles(_need, token)
     except Exception:
         pass
     print(f"[timing] prefetch_candles {time.time() - _t_p0:.1f}s", flush=True)
