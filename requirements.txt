@@ -1,3 +1,13 @@
+streamlit
+requests
+pandas
+numpy
+plotly
+streamlit-autorefresh
+websocket-client
+protobuf
+scikit-learn==1.9.0
+joblib
 kotakneoapi>=3.0.7
 pyotp
 httpx

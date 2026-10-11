@@ -16,6 +16,7 @@ from neo_api_client.websocket.feed import WsToken
 sys.path.insert(0, os.environ.get("APP_DIR", os.path.dirname(os.path.abspath(__file__))))
 from candle_aggregator import CandleAggregator, INTERVALS_SECONDS
 
+STATUS = {"msg": "not started"}
 IST = timezone(timedelta(hours=5, minutes=30))
 OUT_CANDLES = os.environ.get("FNO_LIVE_CANDLES_OUTPUT", "fno_live_candles.json")
 OUT_QUOTES = os.environ.get("KOTAK_QUOTES_OUTPUT", "kotak_quotes.json")
@@ -44,13 +45,15 @@ def load_creds():
 
 def login():
     c = load_creds()
-    manual = os.environ.get("KOTAK_MANUAL_TOTP") == "1"
+    manual = os.environ.get("KOTAK_MANUAL_TOTP") == "1" or bool(os.environ.get("KOTAK_TOTP_NOW"))
     need = ["KOTAK_CONSUMER_KEY", "KOTAK_MOBILE", "KOTAK_UCC", "KOTAK_MPIN"] + ([] if manual else ["KOTAK_TOTP_SECRET"])
     for k in need:
         if not c.get(k):
-            sys.exit("Missing " + k)
+            raise RuntimeError("Missing " + k + " (add it to Streamlit secrets / kotak_creds.txt, or enter a TOTP in the sidebar)")
     client = NeoAPI(consumer_key=c["KOTAK_CONSUMER_KEY"], environment="prod")
-    if manual:
+    if os.environ.get("KOTAK_TOTP_NOW"):
+        totp = os.environ.pop("KOTAK_TOTP_NOW").strip()
+    elif manual:
         totp = input("Enter the current 6-digit TOTP from your authenticator app: ").strip()
     else:
         totp = pyotp.TOTP(c["KOTAK_TOTP_SECRET"].replace(" ", "")).now()
@@ -111,7 +114,7 @@ async def stream(client, tok2sym, cache, stocks, indices):
                     }
 
 
-def main():
+def main(embedded=False):
     cache = json.load(open(CACHE_FILE))
     tokens = json.load(open("kotak_tokens.json"))
     tok2sym = {str(t): s for s, t in tokens.items()}
@@ -128,13 +131,16 @@ def main():
         now = datetime.now(IST)
         live = os.environ.get("KOTAK_ALWAYS") == "1" or now.weekday() < 5 and (8 * 60 + 50) <= now.hour * 60 + now.minute <= (15 * 60 + 45)
         if not live:
+            STATUS["msg"] = "waiting for market hours (Mon-Fri 08:50-15:45 IST)"
             time.sleep(30); continue
         try:
             client = login()
             print("logged in", now.isoformat(), flush=True)
+            STATUS["msg"] = "connected " + now.strftime("%H:%M:%S")
             asyncio.run(stream(client, tok2sym, cache, stocks, indices))
         except Exception as e:
             print("feed error, retrying in 15s:", repr(e), flush=True)
+            STATUS["msg"] = "error: " + str(e)[:150]
         time.sleep(15)
 
 
