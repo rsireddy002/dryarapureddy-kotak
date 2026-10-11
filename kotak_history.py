@@ -122,3 +122,14 @@ def get_history(symbol, days=7):
     df["oi"] = 0
     df["date"] = df["timestamp"].dt.date
     return df.sort_values("timestamp").reset_index(drop=True)
+
+
+def diag(sample="HDFCBANK"):
+    """One-line status for the sidebar: file present, symbols cached, sample rows."""
+    try:
+        d = _load()
+        n = len(d.get("data", {}))
+        rows = len(get_candles(sample))
+        return f"file={'yes' if os.path.exists(HIST_FILE) else 'no'} symbols={n} {sample}_rows={rows} cwd={os.getcwd()}"
+    except Exception as e:
+        return "diag error: " + repr(e)[:150]

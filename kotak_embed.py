@@ -42,6 +42,7 @@ def render_sidebar():
         st.markdown("**Kotak live feed**")
         st.caption(kotak_feed.STATUS.get("msg", ""))
         st.caption(kotak_history.STATUS.get("msg", ""))
+        st.caption(kotak_history.diag())
         st.caption("check: " + ", ".join(k.replace("KOTAK_", "") + "=" + ("yes" if os.environ.get(k) else "no") for k in _KEYS)
                    + " | thread alive=" + str(_start_thread().is_alive()))
         if not os.environ.get("KOTAK_TOTP_SECRET"):
