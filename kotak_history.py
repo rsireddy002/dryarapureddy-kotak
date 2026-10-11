@@ -15,15 +15,60 @@ LOOKBACK_DAYS = 8
 PACE_SECONDS = 1.2
 STATUS = {"msg": "history: not started"}
 # Index "tokens" are their names on nse_cm (history works; live index ticks are untested)
-INDEX_TOKENS = {"NIFTY": "Nifty 50", "BANKNIFTY": "Nifty Bank"}
+INDEX_TOKENS = {"NIFTY": "Nifty 50", "BANKNIFTY": "Nifty Bank"}   # kept for reference; charts/zones use futures
+FUT_SYMBOLS = ("NIFTY", "BANKNIFTY")
+_FUT_CACHE = {"day": None, "map": {}}
 
 
-def _session_only(df):
-    """Keep continuous-session bars only (09:15-15:14); index feeds add flat auction-time bars after 15:15."""
+def resolve_index_futures(client):
+    """{'NIFTY': '48704', ...}: nearest-expiry index futures tokens from Kotak's nse_fo scrip master.
+    Cached per day. Futures carry volume (index candles do not) and trade until 15:40."""
+    import io, re
+    import requests
+    today = datetime.now(IST).date().isoformat()
+    if _FUT_CACHE["day"] == today and _FUT_CACHE["map"]:
+        return _FUT_CACHE["map"]
+    url = client.scrip_master("nse_fo")
+    if not isinstance(url, str):
+        url = (url.get("filesPaths") or [None])[0] if isinstance(url, dict) else None
+    df = pd.read_csv(io.StringIO(requests.get(url, timeout=90).text), low_memory=False)
+    df.columns = [str(c).strip().rstrip(";") for c in df.columns]
+    df["pSymbolName"] = df["pSymbolName"].astype(str).str.strip()
+    df["pTrdSymbol"] = df["pTrdSymbol"].astype(str).str.strip()
+    out = {}
+    for sym in FUT_SYMBOLS:
+        best = None
+        for _, r in df[(df["pSymbolName"] == sym) & df["pTrdSymbol"].str.endswith("FUT")].iterrows():
+            m = re.match(rf"^{sym}(\d{{2}})([A-Z]{{3}})FUT$", r["pTrdSymbol"])
+            if not m:
+                continue
+            mon = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"].index(m.group(2))
+            key = (int(m.group(1)), mon)
+            if best is None or key < best[0]:
+                best = (key, str(int(r["pSymbol"])))
+        if best:
+            out[sym] = best[1]
+    _FUT_CACHE.update(day=today, map=out)
+    return out
+
+
+def _resolve_targets(client, tokens):
+    """tokens (symbol -> nse_cm token) -> {symbol: (segment, token)}; index symbols map to futures."""
+    tg = {s: ("nse_cm", t) for s, t in tokens.items() if s not in FUT_SYMBOLS}
+    try:
+        for s, t in resolve_index_futures(client).items():
+            tg[s] = ("nse_fo", t)
+    except Exception as e:
+        STATUS["msg"] = "history: futures lookup failed " + str(e)[:80]
+    return tg
+
+
+def _session_only(df, fut=False):
+    """Keep continuous-session bars: stocks 09:15-15:14, index futures 09:15-15:39 (F&O trades to 15:40)."""
     if df.empty:
         return df
     m = df["timestamp"].dt.hour * 60 + df["timestamp"].dt.minute
-    return df[m < 15 * 60 + 15].reset_index(drop=True)
+    return df[m < (15 * 60 + 40 if fut else 15 * 60 + 15)].reset_index(drop=True)
 _LOCK = threading.Lock()
 _MEM = {"mtime": 0, "data": {}}
 
@@ -64,14 +109,14 @@ def _refresh(client, tokens):
     today = datetime.now(IST).date()
     frm = (today - timedelta(days=LOOKBACK_DAYS)).isoformat()
     to = today.isoformat()
-    out = {"_fetched_for": _expected_session(), "_updated": time.time(), "_tokens": sorted(tokens), "data": {}}
-    syms = list(tokens.items())
-    for i, (sym, tok) in enumerate(syms):
+    out = {"_fetched_for": _expected_session(), "_updated": time.time(), "_tokens": sorted(tokens), "_fut": 1, "data": {}}
+    syms = list(_resolve_targets(client, tokens).items())
+    for i, (sym, (seg, tok)) in enumerate(syms):
         rows = []
         for attempt in range(3):
             try:
                 rows = _candles_from(client.historical_data(
-                    neosymbol=f"nse_cm|{tok}", interval="5min", from_date=frm, to_date=to))
+                    neosymbol=f"{seg}|{tok}", interval="5min", from_date=frm, to_date=to))
                 if rows:
                     break
                 time.sleep(15 if attempt else PACE_SECONDS)
@@ -93,7 +138,7 @@ def run_forever(login_fn):
     while True:
         try:
             have = _load()
-            if (have.get("_fetched_for") != _expected_session() or have.get("_tokens") != sorted(tokens)
+            if (have.get("_fetched_for") != _expected_session() or have.get("_tokens") != sorted(tokens) or not have.get("_fut")
                     or len(have.get("data", {})) < 0.8 * len(tokens)):
                 STATUS["msg"] = "history: logging in"
                 _refresh(login_fn(), tokens)
@@ -111,7 +156,7 @@ def get_candles(symbol, interval=5):
         return pd.DataFrame(columns=cols)
     df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
     df["timestamp"] = pd.to_datetime(df["timestamp"])
-    df = _session_only(df.sort_values("timestamp").reset_index(drop=True))
+    df = _session_only(df.sort_values("timestamp").reset_index(drop=True), (symbol or "").strip().upper() in FUT_SYMBOLS)
     if df.empty:
         return pd.DataFrame(columns=cols)
     df["date"] = df["timestamp"].dt.date
@@ -134,7 +179,7 @@ def get_history(symbol, days=7):
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df["oi"] = 0
     df["date"] = df["timestamp"].dt.date
-    return _session_only(df.sort_values("timestamp").reset_index(drop=True))
+    return _session_only(df.sort_values("timestamp").reset_index(drop=True), (symbol or "").strip().upper() in FUT_SYMBOLS)
 
 
 def diag(sample="HDFCBANK"):
@@ -148,7 +193,7 @@ def diag(sample="HDFCBANK"):
         return "diag error: " + repr(e)[:150]
 
 
-def fetch_frame(client, token, interval, days, retries=3):
+def fetch_frame(client, token, interval, days, retries=3, seg="nse_cm"):
     """Kotak historical candles for one stock as a DataFrame shaped like the Upstox REST frame
     (timestamp tz-aware, open/high/low/close/volume/oi/date). interval: '5min' (<=30 days) or 'D' (<=180).
     Paced: sleeps PACE_SECONDS after the call. Returns an empty frame if nothing came back."""
@@ -158,7 +203,7 @@ def fetch_frame(client, token, interval, days, retries=3):
     for attempt in range(retries):
         try:
             rows = _candles_from(client.historical_data(
-                neosymbol=f"nse_cm|{token}", interval=interval, from_date=frm, to_date=today.isoformat()))
+                neosymbol=f"{seg}|{token}", interval=interval, from_date=frm, to_date=today.isoformat()))
             if rows:
                 break
         except Exception:
@@ -171,7 +216,7 @@ def fetch_frame(client, token, interval, days, retries=3):
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df = df.sort_values("timestamp").reset_index(drop=True)
     if interval != "D":
-        df = _session_only(df)
+        df = _session_only(df, seg == "nse_fo")
     df["oi"] = 0
     df["date"] = df["timestamp"].dt.date
     return df
