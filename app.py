@@ -1104,6 +1104,7 @@ def run_precompute(token, progress_callback=None):
     _k_client = kotak_feed.login()
     try:
         _k_tokens = json.load(open("kotak_tokens.json"))
+        _k_tokens = {**_k_tokens, **kotak_history.INDEX_TOKENS}
     except Exception:
         _k_tokens = {}
     try:
@@ -1158,6 +1159,7 @@ def run_precompute(token, progress_callback=None):
                     prev_close = float(intraday_df["close"].iloc[-1])
             avg_daily_volume = (float(daily_df["volume"].tail(RVOL_BASELINE_DAYS).mean())
                                  if len(daily_df) >= RVOL_BASELINE_DAYS else None)
+            avg_daily_volume = avg_daily_volume or None  # indices report 0 volume
             composite_zones = compute_composite_zones(intraday_df)
             intraday_zones = compute_intraday_zones(intraday_df)  # seed with today's slice of what we already have
             ema_200 = compute_ema_200(intraday_df["close"].tolist()) if not intraday_df.empty else None

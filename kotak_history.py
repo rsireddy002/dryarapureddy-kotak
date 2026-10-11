@@ -14,6 +14,16 @@ HIST_FILE = "kotak_history.json"
 LOOKBACK_DAYS = 8
 PACE_SECONDS = 1.2
 STATUS = {"msg": "history: not started"}
+# Index "tokens" are their names on nse_cm (history works; live index ticks are untested)
+INDEX_TOKENS = {"NIFTY": "Nifty 50", "BANKNIFTY": "Nifty Bank"}
+
+
+def _session_only(df):
+    """Keep continuous-session bars only (09:15-15:14); index feeds add flat auction-time bars after 15:15."""
+    if df.empty:
+        return df
+    m = df["timestamp"].dt.hour * 60 + df["timestamp"].dt.minute
+    return df[m < 15 * 60 + 15].reset_index(drop=True)
 _LOCK = threading.Lock()
 _MEM = {"mtime": 0, "data": {}}
 
@@ -79,7 +89,7 @@ def _refresh(client, tokens):
 
 def run_forever(login_fn):
     """Background loop: refetch when the cache doesn't cover the latest completed session."""
-    tokens = json.load(open("kotak_tokens.json"))
+    tokens = {**json.load(open("kotak_tokens.json")), **INDEX_TOKENS}
     while True:
         try:
             have = _load()
@@ -100,7 +110,9 @@ def get_candles(symbol, interval=5):
         return pd.DataFrame(columns=cols)
     df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
     df["timestamp"] = pd.to_datetime(df["timestamp"])
-    df = df.sort_values("timestamp").reset_index(drop=True)
+    df = _session_only(df.sort_values("timestamp").reset_index(drop=True))
+    if df.empty:
+        return pd.DataFrame(columns=cols)
     df["date"] = df["timestamp"].dt.date
     df = df[df["date"] == df["date"].max()].reset_index(drop=True)
     if int(interval) == 15:
@@ -121,7 +133,7 @@ def get_history(symbol, days=7):
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df["oi"] = 0
     df["date"] = df["timestamp"].dt.date
-    return df.sort_values("timestamp").reset_index(drop=True)
+    return _session_only(df.sort_values("timestamp").reset_index(drop=True))
 
 
 def diag(sample="HDFCBANK"):
@@ -157,6 +169,8 @@ def fetch_frame(client, token, interval, days, retries=3):
     df = pd.DataFrame([r[:6] for r in rows], columns=["timestamp", "open", "high", "low", "close", "volume"])
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df = df.sort_values("timestamp").reset_index(drop=True)
+    if interval != "D":
+        df = _session_only(df)
     df["oi"] = 0
     df["date"] = df["timestamp"].dt.date
     return df
