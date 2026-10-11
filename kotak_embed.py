@@ -6,7 +6,7 @@ import streamlit as st
 
 import kotak_feed
 
-_KEYS = ("KOTAK_CONSUMER_KEY", "KOTAK_MOBILE", "KOTAK_UCC", "KOTAK_MPIN", "KOTAK_TOTP_SECRET")
+_KEYS = ("KOTAK_ALWAYS", "KOTAK_CONSUMER_KEY", "KOTAK_MOBILE", "KOTAK_UCC", "KOTAK_MPIN", "KOTAK_TOTP_SECRET")
 
 
 @st.cache_resource
