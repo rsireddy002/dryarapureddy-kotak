@@ -64,7 +64,7 @@ def _refresh(client, tokens):
     today = datetime.now(IST).date()
     frm = (today - timedelta(days=LOOKBACK_DAYS)).isoformat()
     to = today.isoformat()
-    out = {"_fetched_for": _expected_session(), "_updated": time.time(), "data": {}}
+    out = {"_fetched_for": _expected_session(), "_updated": time.time(), "_tokens": sorted(tokens), "data": {}}
     syms = list(tokens.items())
     for i, (sym, tok) in enumerate(syms):
         rows = []
@@ -93,7 +93,8 @@ def run_forever(login_fn):
     while True:
         try:
             have = _load()
-            if have.get("_fetched_for") != _expected_session() or len(have.get("data", {})) < 0.8 * len(tokens):
+            if (have.get("_fetched_for") != _expected_session() or have.get("_tokens") != sorted(tokens)
+                    or len(have.get("data", {})) < 0.8 * len(tokens)):
                 STATUS["msg"] = "history: logging in"
                 _refresh(login_fn(), tokens)
         except Exception as e:
