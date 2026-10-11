@@ -1098,23 +1098,53 @@ def get_today_candles_for_interval(symbol, instrument_key, token, unit, interval
 
 def run_precompute(token, progress_callback=None):
     cache = {}
+    # Kotak-only: history comes from Kotak Neo (no Upstox calls). Symbols without a Kotak
+    # token (NIFTY, BANKNIFTY, HFCL) keep their previous cached entry unchanged.
+    import kotak_feed, kotak_history
+    _k_client = kotak_feed.login()
+    try:
+        _k_tokens = json.load(open("kotak_tokens.json"))
+    except Exception:
+        _k_tokens = {}
+    try:
+        _prev_cache = json.load(open(CACHE_PATH))
+    except Exception:
+        _prev_cache = {}
     all_symbols = [(s, "futures") for s in FUTURES_SYMBOLS] + [(s, "equity") for s in EQUITY_SYMBOLS]
     for i, (symbol, kind) in enumerate(all_symbols):
         _sym_t0 = time.time()  # DIAGNOSTIC (temporary): total per-symbol wall time
         try:
-            key, lot_size = (resolve_equity_instrument_key(symbol, token) if kind == "equity"
-                              else resolve_futures_instrument_key(symbol, token))
+            _ktok = _k_tokens.get(symbol)
+            if not _ktok:
+                if symbol in _prev_cache:
+                    cache[symbol] = _prev_cache[symbol]
+                if progress_callback:
+                    progress_callback(i + 1, len(all_symbols), symbol)
+                continue
+            _pv = _prev_cache.get(symbol) or {}
+            key, lot_size = _pv.get("instrument_key"), _pv.get("lot_size")
+            if key is None:
+                try:
+                    key, lot_size = (resolve_equity_instrument_key(symbol, token) if kind == "equity"
+                                      else resolve_futures_instrument_key(symbol, token))
+                except Exception:
+                    key = None
             if key is None:
                 continue
-            daily_df = fetch_candles(key, token, "days", "1", DAILY_LOOKBACK_DAYS)
+            daily_df = kotak_history.fetch_frame(_k_client, _ktok, "D", DAILY_LOOKBACK_DAYS)
             _after_daily = time.time()
             if _after_daily - _sym_t0 > 5:
                 print(f"[precompute] {symbol}: daily candles took {_after_daily - _sym_t0:.1f}s")
-            intraday_df = fetch_candles(key, token, "minutes", "5", COMPOSITE_LOOKBACK_DAYS)
+            intraday_df = kotak_history.fetch_frame(_k_client, _ktok, "5min", COMPOSITE_LOOKBACK_DAYS)
             _after_intraday = time.time()
             if _after_intraday - _after_daily > 5:
                 print(f"[precompute] {symbol}: intraday candles took {_after_intraday - _after_daily:.1f}s")
 
+            if intraday_df.empty:
+                # Kotak returned nothing for this symbol: keep its previous zones rather than overwrite with blanks
+                if symbol in _prev_cache:
+                    cache[symbol] = _prev_cache[symbol]
+                continue
             prev_close = float(daily_df["close"].iloc[-1]) if not daily_df.empty else None
             # Upstox's daily candle API can lag a day behind (may not
             # include today's candle even after market close), while
@@ -1155,7 +1185,7 @@ def run_precompute(token, progress_callback=None):
                   f"(i={i + 1}/{len(all_symbols)})")
         if progress_callback:
             progress_callback(i + 1, len(all_symbols), symbol)
-        time.sleep(0.15)
+        pass
 
     _atomic_json_dump(CACHE_PATH, cache)
     return cache

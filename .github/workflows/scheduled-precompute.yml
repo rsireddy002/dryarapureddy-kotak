@@ -4,9 +4,9 @@ permissions:
   contents: write
 
 on:
-  schedule:
-    # 10:35 UTC = 4:05 PM IST, shortly after market close (3:30 PM IST)
-    - cron: "35 10 * * 1-5"
+  # Nightly schedule disabled: this repo is Kotak-only; use the app's "Run Precompute" button.
+  # schedule:
+  #   - cron: "35 10 * * 1-5"
   workflow_dispatch: {}  # lets you trigger it manually from the Actions tab too
 
 jobs:

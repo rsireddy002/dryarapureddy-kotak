@@ -133,3 +133,30 @@ def diag(sample="HDFCBANK"):
         return f"file={'yes' if os.path.exists(HIST_FILE) else 'no'} symbols={n} {sample}_rows={rows} cwd={os.getcwd()}"
     except Exception as e:
         return "diag error: " + repr(e)[:150]
+
+
+def fetch_frame(client, token, interval, days, retries=3):
+    """Kotak historical candles for one stock as a DataFrame shaped like the Upstox REST frame
+    (timestamp tz-aware, open/high/low/close/volume/oi/date). interval: '5min' (<=30 days) or 'D' (<=180).
+    Paced: sleeps PACE_SECONDS after the call. Returns an empty frame if nothing came back."""
+    today = datetime.now(IST).date()
+    frm = (today - timedelta(days=days)).isoformat()
+    rows = []
+    for attempt in range(retries):
+        try:
+            rows = _candles_from(client.historical_data(
+                neosymbol=f"nse_cm|{token}", interval=interval, from_date=frm, to_date=today.isoformat()))
+            if rows:
+                break
+        except Exception:
+            pass
+        time.sleep(15)
+    time.sleep(PACE_SECONDS)
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame([r[:6] for r in rows], columns=["timestamp", "open", "high", "low", "close", "volume"])
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df = df.sort_values("timestamp").reset_index(drop=True)
+    df["oi"] = 0
+    df["date"] = df["timestamp"].dt.date
+    return df
