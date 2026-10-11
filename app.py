@@ -1116,6 +1116,20 @@ def run_precompute(token, progress_callback=None):
         _sym_t0 = time.time()  # DIAGNOSTIC (temporary): total per-symbol wall time
         try:
             _ktok = _k_tokens.get(symbol)
+            if symbol in kotak_history.INDEX_TOKENS:
+                # Kotak index candles carry no volume, so volume-profile zones can't be computed from
+                # them (the old zones came from the futures contract). Keep previous/backup zones.
+                _keep = _prev_cache.get(symbol)
+                if not (_keep and (_keep.get("composite_zones") or _keep.get("intraday_zones"))):
+                    try:
+                        _keep = json.load(open("index_zones_backup.json")).get(symbol, _keep)
+                    except Exception:
+                        pass
+                if _keep:
+                    cache[symbol] = _keep
+                if progress_callback:
+                    progress_callback(i + 1, len(all_symbols), symbol)
+                continue
             if not _ktok:
                 if symbol in _prev_cache:
                     cache[symbol] = _prev_cache[symbol]
