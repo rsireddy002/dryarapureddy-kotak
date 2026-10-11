@@ -99,6 +99,26 @@ def _load():
         return _MEM["data"]
 
 
+def _timed(fn, timeout=40):
+    """Run fn() in a helper thread; return its result, or raise TimeoutError if it hangs (SDK calls have no timeout)."""
+    box = {}
+
+    def run():
+        try:
+            box["v"] = fn()
+        except Exception as e:  # noqa: BLE001
+            box["e"] = e
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        raise TimeoutError("Kotak call timed out")
+    if "e" in box:
+        raise box["e"]
+    return box.get("v")
+
+
 def _candles_from(resp):
     if isinstance(resp, dict) and isinstance(resp.get("data"), dict):
         return resp["data"].get("candles") or []
@@ -115,16 +135,24 @@ def _refresh(client, tokens):
         rows = []
         for attempt in range(3):
             try:
-                rows = _candles_from(client.historical_data(
-                    neosymbol=f"{seg}|{tok}", interval="5min", from_date=frm, to_date=to))
+                rows = _candles_from(_timed(lambda: client.historical_data(
+                    neosymbol=f"{seg}|{tok}", interval="5min", from_date=frm, to_date=to)))
                 if rows:
                     break
                 time.sleep(15 if attempt else PACE_SECONDS)
-            except Exception:
+            except Exception as e:
+                STATUS["msg"] = f"history: {sym} retry ({repr(e)[:60]})"
                 time.sleep(15)
         if rows:
             out["data"][sym] = rows
-        STATUS["msg"] = f"history: fetching {i + 1}/{len(syms)}"
+        STATUS["msg"] = f"history: fetching {i + 1}/{len(syms)} (last {sym}: {len(rows)} rows, ok={len(out['data'])})"
+        if (i + 1) % 25 == 0:  # partial save so charts fill in as we go
+            try:
+                _tmp = dict(out, _fetched_for=None)
+                json.dump(_tmp, open(HIST_FILE + ".tmp", "w"))
+                os.replace(HIST_FILE + ".tmp", HIST_FILE)
+            except Exception:
+                pass
         time.sleep(PACE_SECONDS)
     tmp = HIST_FILE + ".tmp"
     json.dump(out, open(tmp, "w"))
@@ -202,8 +230,8 @@ def fetch_frame(client, token, interval, days, retries=3, seg="nse_cm"):
     rows = []
     for attempt in range(retries):
         try:
-            rows = _candles_from(client.historical_data(
-                neosymbol=f"{seg}|{token}", interval=interval, from_date=frm, to_date=today.isoformat()))
+            rows = _candles_from(_timed(lambda: client.historical_data(
+                neosymbol=f"{seg}|{token}", interval=interval, from_date=frm, to_date=today.isoformat())))
             if rows:
                 break
         except Exception:
