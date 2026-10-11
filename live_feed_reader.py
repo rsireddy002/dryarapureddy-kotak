@@ -92,6 +92,16 @@ def get_live_candles(symbol: str, interval: str = "5") -> pd.DataFrame:
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df = df.sort_values("timestamp").reset_index(drop=True)
     df = df[["timestamp", "open", "high", "low", "close", "volume"]].copy()
+    # Only real exchange-session bars: Mon-Fri 09:15-15:30 IST. Anything else (e.g. a feed
+    # left running on a weekend) is flat, fake data and must not hide the last real session.
+    _ts = df["timestamp"]
+    if _ts.dt.tz is not None:
+        _ts = _ts.dt.tz_convert("Asia/Kolkata")
+    _mins = _ts.dt.hour * 60 + _ts.dt.minute
+    _ok = (_ts.dt.weekday < 5) & (_mins >= 9 * 60 + 15) & (_mins < 15 * 60 + 30)
+    df = df[_ok.values].reset_index(drop=True)
+    if df.empty:
+        return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume", "oi", "date"])
     # Match the REST candle frame (app.py reads df["date"] and df["oi"]).
     df["oi"] = 0
     df["date"] = df["timestamp"].dt.date
