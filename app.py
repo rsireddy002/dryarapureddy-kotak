@@ -1072,10 +1072,11 @@ def get_today_candles(symbol, instrument_key, token):
     live_df = get_live_candles(symbol, interval=str(CANDLE_INTERVAL_MINUTES))
     if live_df is not None and not live_df.empty:
         return live_df
-    hit = _PREFETCH.get(instrument_key)
-    if hit is not None and time.time() - hit[0] <= _prefetch_ttl() and not hit[1].empty:
-        return hit[1]
-    return fetch_today_candles_cached(instrument_key, token)
+    import kotak_history
+    _kh = kotak_history.get_candles(symbol, CANDLE_INTERVAL_MINUTES)
+    if not _kh.empty:
+        return _kh
+    return pd.DataFrame()
 
 
 def get_today_candles_for_interval(symbol, instrument_key, token, unit, interval):
@@ -1091,7 +1092,8 @@ def get_today_candles_for_interval(symbol, instrument_key, token, unit, interval
         live_df = get_live_candles(symbol, interval=interval)
         if live_df is not None and not live_df.empty:
             return live_df
-    return fetch_today_candles_interval_cached(instrument_key, token, unit, interval)
+    import kotak_history
+    return kotak_history.get_candles(symbol, int(interval) if unit == "minutes" else 5)
 
 
 def run_precompute(token, progress_callback=None):
