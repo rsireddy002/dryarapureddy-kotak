@@ -968,41 +968,27 @@ def fetch_intraday_candles(instrument_key, token, unit="minutes", interval="5"):
     return df
 
 
+_IK2SYM = {}
+
+
+def _kotak_symbol_for(instrument_key):
+    if not _IK2SYM:
+        try:
+            for _s, _v in json.load(open(CACHE_FILE)).items():
+                if isinstance(_v, dict) and _v.get("instrument_key"):
+                    _IK2SYM[_v["instrument_key"]] = _s
+        except Exception:
+            pass
+    return _IK2SYM.get(instrument_key)
+
+
 def fetch_today_candles_for(instrument_key, token, unit="minutes", interval="5"):
-    """Generalized version of fetch_today_candles, parameterized by
-    unit/interval -- today's session candles via the intraday endpoint,
-    falling back to the historical endpoint's last available day (e.g.
-    before market open, when the intraday endpoint may return nothing
-    yet) so the Chart/zone/Dashboard functions always get something to
-    work with.
-
-    The fallback call is wrapped defensively (unlike fetch_candles'
-    other call site inside run_precompute, which already has its own
-    try/except + logging and should keep raising so failures there stay
-    visible) -- this call site feeds live chart rendering for 200+
-    symbols at once (Sectors/By RVOL/Wide Range/Zone Watch), where one
-    symbol's request failing (e.g. a 400 from asking the historical
-    endpoint for a still-open trading day, which it doesn't support)
-    must not crash the whole page.
-
-    lookback_days=7 (not 1) so this reliably reaches the last real
-    trading day across a weekend or a multi-day holiday cluster -- e.g.
-    on a Sunday, looking back just 1 day lands on Saturday, which is
-    also closed, so the fetch would still come back empty and the
-    Chart tab would show "No candle data yet for today" instead of
-    Friday's candles. 7 days comfortably covers any NSE holiday run."""
-    df = fetch_intraday_candles(instrument_key, token, unit, interval)
-    if not df.empty:
-        return df
-
-    try:
-        df = fetch_candles(instrument_key, token, unit, interval, lookback_days=7)
-    except requests.exceptions.RequestException:
+    """Kotak-only: last session's candles from kotak_history (no Upstox calls)."""
+    import kotak_history
+    sym = _kotak_symbol_for(instrument_key)
+    if not sym:
         return pd.DataFrame()
-    if df.empty:
-        return df
-    latest = df["date"].max()
-    return df[df["date"] == latest]
+    return kotak_history.get_candles(sym, int(interval) if unit == "minutes" else 5)
 
 
 def fetch_today_candles(instrument_key, token):
