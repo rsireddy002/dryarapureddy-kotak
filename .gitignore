@@ -1,0 +1,5 @@
+.env
+*.token
+*.log
+__pycache__/
+kotak_creds.txt
