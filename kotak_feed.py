@@ -44,11 +44,16 @@ def load_creds():
 
 def login():
     c = load_creds()
-    for k in ("KOTAK_CONSUMER_KEY", "KOTAK_MOBILE", "KOTAK_UCC", "KOTAK_MPIN", "KOTAK_TOTP_SECRET"):
+    manual = os.environ.get("KOTAK_MANUAL_TOTP") == "1"
+    need = ["KOTAK_CONSUMER_KEY", "KOTAK_MOBILE", "KOTAK_UCC", "KOTAK_MPIN"] + ([] if manual else ["KOTAK_TOTP_SECRET"])
+    for k in need:
         if not c.get(k):
             sys.exit("Missing " + k)
     client = NeoAPI(consumer_key=c["KOTAK_CONSUMER_KEY"], environment="prod")
-    totp = pyotp.TOTP(c["KOTAK_TOTP_SECRET"].replace(" ", "")).now()
+    if manual:
+        totp = input("Enter the current 6-digit TOTP from your authenticator app: ").strip()
+    else:
+        totp = pyotp.TOTP(c["KOTAK_TOTP_SECRET"].replace(" ", "")).now()
     r1 = client.totp_login(mobile_number=c["KOTAK_MOBILE"], ucc=c["KOTAK_UCC"], totp=totp)
     if not r1 or (isinstance(r1, dict) and (r1.get("error") or r1.get("errors"))):
         raise RuntimeError("login step 1 failed: " + str(r1)[:200])
