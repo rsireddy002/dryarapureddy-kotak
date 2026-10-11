@@ -91,7 +91,11 @@ def get_live_candles(symbol: str, interval: str = "5") -> pd.DataFrame:
     df = pd.DataFrame(bars)
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df = df.sort_values("timestamp").reset_index(drop=True)
-    return df[["timestamp", "open", "high", "low", "close", "volume"]]
+    df = df[["timestamp", "open", "high", "low", "close", "volume"]].copy()
+    # Match the REST candle frame (app.py reads df["date"] and df["oi"]).
+    df["oi"] = 0
+    df["date"] = df["timestamp"].dt.date
+    return df
 
 
 def is_feed_alive() -> bool:
