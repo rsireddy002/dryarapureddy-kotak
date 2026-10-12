@@ -3446,34 +3446,32 @@ if os.path.exists(CACHE_PATH):
                 total_symbols = len([s for s in symbols_with_zones if s in SECTOR_MAP])
                 st.caption(
                     f"{total_symbols} symbols across {len(available_sectors)} sectors, split into "
-                    f"groups of two sectors -- one tab per group."
+                    f"groups of two sectors -- pick a group below (only that group is drawn, so it loads fast)."
                 )
                 _sec_list = [sec for sec in available_sectors
                              if any(SECTOR_MAP.get(x) == sec for x in symbols_with_zones)]
                 _groups = [_sec_list[i:i + 2] for i in range(0, len(_sec_list), 2)]
                 _labels = [f"{i + 1}. " + " + ".join(g) for i, g in enumerate(_groups)]
-                # Normal tabs (switch instantly in the browser, no rerun needed), one per
-                # group of two sectors, at user request. Note: st.tabs runs every tab's body
-                # on each rerun, so all groups are built each refresh.
+                # Only the SELECTED group is built. st.tabs ran every tab's body on each rerun, so
+                # one refresh built all ~227 symbols' price+CVD charts (454 figures) one after another
+                # -- minutes on Streamlit Cloud, so only the first sectors ever appeared. A selector
+                # renders ~30 charts per run; the figure cache keeps re-selecting a group quick.
                 token = get_token()
                 _idx_syms = [x for x in FUTURES_SYMBOLS if x in symbols_with_zones]
                 _tab_titles = (["Nifty + BankNifty"] if _idx_syms else []) + _labels
-                _all_tabs = st.tabs(_tab_titles)
-                if _idx_syms:
-                    with _all_tabs[0]:
-                        render_symbol_grid(_idx_syms, token, key_prefix="idx", lite=True)
-                    _group_tabs = _all_tabs[1:]
+                _sel = st.radio("Sector group", _tab_titles, horizontal=True, key="sector_group_sel",
+                                label_visibility="collapsed")
+                if _idx_syms and _sel == _tab_titles[0]:
+                    render_symbol_grid(_idx_syms, token, key_prefix="idx", lite=True)
                 else:
-                    _group_tabs = _all_tabs
-                for _gtab, _grp in zip(_group_tabs, _groups):
-                    with _gtab:
-                        for sector in _grp:
-                            sector_symbols = [x for x in symbols_with_zones if SECTOR_MAP.get(x) == sector]
-                            if not sector_symbols:
-                                continue
-                            st.markdown(f"## {sector}")
-                            render_symbol_grid(sector_symbols, token, lite=True)
-                            st.divider()
+                    _gi = _labels.index(_sel) if _sel in _labels else 0
+                    for sector in _groups[_gi]:
+                        sector_symbols = [x for x in symbols_with_zones if SECTOR_MAP.get(x) == sector]
+                        if not sector_symbols:
+                            continue
+                        st.markdown(f"## {sector}")
+                        render_symbol_grid(sector_symbols, token, lite=True)
+                        st.divider()
 
     with tab_breaks:
         st.caption(
