@@ -1096,6 +1096,18 @@ def get_today_candles_for_interval(symbol, instrument_key, token, unit, interval
     return kotak_history.get_candles(symbol, int(interval) if unit == "minutes" else 5)
 
 
+def _warn_safe(msg):
+    """st.warning from the page, plain print from the background auto-precompute thread."""
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+        if get_script_run_ctx() is not None:
+            st.warning(msg)
+            return
+    except Exception:
+        pass
+    print("[precompute] " + str(msg))
+
+
 def run_precompute(token, progress_callback=None):
     cache = {}
     # Kotak-only: history comes from Kotak Neo (no Upstox calls). Symbols without a Kotak
@@ -1108,7 +1120,7 @@ def run_precompute(token, progress_callback=None):
         try:
             _fut_map = kotak_history.resolve_index_futures(_k_client)
         except Exception as _e:
-            st.warning(f"index futures lookup failed ({_e}); NIFTY/BANKNIFTY keep previous zones")
+            _warn_safe(f"index futures lookup failed ({_e}); NIFTY/BANKNIFTY keep previous zones")
     except Exception:
         _k_tokens = {}
     try:
@@ -1188,7 +1200,7 @@ def run_precompute(token, progress_callback=None):
                 "composite_updated_at": now_ist().strftime("%Y-%m-%d %H:%M:%S"),
             }
         except Exception as e:
-            st.warning(f"{symbol}: precompute failed ({e}), skipping.")
+            _warn_safe(f"{symbol}: precompute failed ({e}), skipping.")
         _sym_elapsed = time.time() - _sym_t0
         if _sym_elapsed > 10:
             # DIAGNOSTIC (temporary): flags exactly which symbol(s) are slow
@@ -2572,8 +2584,69 @@ def _check_app_password():
 if not _check_app_password():
     st.stop()
 
+# ---- Automatic daily Precompute (Kotak history; no button, no token) -------------------
+@st.cache_resource
+def _auto_state():
+    # lives across script reruns (a module-level dict would be recreated each rerun and the
+    # sidebar would stop seeing what the background thread writes)
+    return {"msg": "auto precompute: waiting"}
+
+
+def _auto_precompute_due():
+    """True when the saved zones were computed before the latest session's close (15:20 IST)
+    and Kotak history already covers that session. Never during market hours."""
+    import kotak_history
+    now = now_ist()
+    mins = now.hour * 60 + now.minute
+    if now.weekday() < 5 and 9 * 60 + 5 <= mins < 15 * 60 + 45:
+        return False, "market hours"
+    need = kotak_history._expected_session()
+    if kotak_history._load().get("_fetched_for") != need:
+        return False, f"waiting for Kotak history ({need})"
+    try:
+        cache = json.load(open(CACHE_PATH))
+    except Exception:
+        cache = {}
+    stamps = [v.get("composite_updated_at") for v in cache.values() if isinstance(v, dict) and v.get("composite_updated_at")]
+    if not cache or not stamps:
+        return True, "no zones saved"
+    if max(stamps) < f"{need} 15:20:00":
+        return True, f"zones older than {need} close"
+    return False, "zones current"
+
+
+def _auto_precompute_loop(state):
+    time.sleep(180)  # let the feed and history threads finish their logins first
+    while True:
+        wait = 300
+        try:
+            due, why = _auto_precompute_due()
+            state["msg"] = f"auto precompute: {why}"
+            if due:
+                state["msg"] = "auto precompute: running (" + why + ")"
+                t0 = time.time()
+                c = run_precompute(os.environ.get("UPSTOX_ANALYTICAL_TOKEN", ""))
+                state["msg"] = (f"auto precompute: done {now_ist().strftime('%a %d %b %H:%M')} IST, "
+                                          f"{len(c)} symbols, {int(time.time() - t0)}s")
+                wait = 900
+        except Exception as e:
+            state["msg"] = "auto precompute error: " + repr(e)[:120]
+            wait = 1800  # do not hammer Kotak login after a failure
+        time.sleep(wait)
+
+
+@st.cache_resource
+def _start_auto_precompute():
+    t = threading.Thread(target=_auto_precompute_loop, args=(_auto_state(),), daemon=True, name="auto-precompute")
+    t.start()
+    return t
+
+
 import kotak_embed
 kotak_embed.render_sidebar()
+_start_auto_precompute()
+with st.sidebar:
+    st.caption(_auto_state()["msg"])
 
 # Disable Streamlit's default full-page dim/fade effect during reruns.
 # This app reruns often (multiple auto-refresh timers across tabs, all
