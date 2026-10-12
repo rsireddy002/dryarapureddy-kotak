@@ -53,6 +53,9 @@ OUTPUT_PATH = os.environ.get(
 MAX_STALENESS_SECONDS = 120
 
 
+_RAW_CACHE = {"mtime": None, "data": None}
+
+
 def _load_raw():
     if not os.path.exists(OUTPUT_PATH):
         return None
@@ -60,8 +63,16 @@ def _load_raw():
         mtime = os.path.getmtime(OUTPUT_PATH)
         if time.time() - mtime > MAX_STALENESS_SECONDS:
             return None
+        # Parse the file only when the feed has rewritten it. get_live_candles() is called
+        # hundreds of times per page run (one per symbol, several times each); re-parsing
+        # the whole multi-MB snapshot every call made scans and the sector view crawl.
+        if _RAW_CACHE["mtime"] == mtime and _RAW_CACHE["data"] is not None:
+            return _RAW_CACHE["data"]
         with open(OUTPUT_PATH, "r") as f:
-            return json.load(f)
+            data = json.load(f)
+        _RAW_CACHE["mtime"] = mtime
+        _RAW_CACHE["data"] = data
+        return data
     except (OSError, json.JSONDecodeError):
         # feed_listener.py writes temp-file-then-rename, so a genuinely
         # torn read shouldn't happen, but don't take the caller down over
