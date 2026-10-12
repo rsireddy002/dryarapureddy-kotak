@@ -82,15 +82,39 @@ def dumper():
         time.sleep(2)
 
 
-async def stream(client, tok2sym, cache, stocks, indices):
+def _futures_tokens(client, tok2sym, cm_tokens):
+    """NIFTY/BANKNIFTY near-month futures (nse_fo). Index spot ticks carry no volume, and the
+    zones are built from the futures contract, so live candles/quotes use it too. Never raises:
+    a failure here must not stop the stock feed."""
+    out = []
+    try:
+        import kotak_history
+        for sym, tok in kotak_history.resolve_index_futures(client).items():
+            tok = str(tok)
+            if tok in cm_tokens:
+                print("futures token", tok, "collides with a stock token; skipping", sym, flush=True)
+                continue
+            tok2sym[tok] = sym
+            out.append(WsToken("nse_fo", tok))
+    except Exception as e:
+        print("futures resolve failed:", repr(e), flush=True)
+    return out
+
+
+async def stream(client, tok2sym, cache, stocks, indices, futures=()):
     async with client.create_websocket() as ws:
         await ws.subscribe_scrips(stocks)
+        if futures:
+            try:
+                await ws.subscribe_scrips(list(futures))
+            except Exception as e:
+                print("futures subscribe failed:", repr(e), flush=True)
         if indices:
             try:
                 await ws.subscribe_index(indices)
             except Exception as e:
                 print("index subscribe failed:", e, flush=True)
-        print("subscribed", len(stocks), "stocks", len(indices), "indices", flush=True)
+        print("subscribed", len(stocks), "stocks", len(indices), "indices", len(futures), "futures", flush=True)
         async for msg in ws:
             d = getattr(msg, "model_dump", lambda: {})()
             ltp = d.get("last_traded_price")
@@ -137,7 +161,8 @@ def main(embedded=False):
             client = login()
             print("logged in", now.isoformat(), flush=True)
             STATUS["msg"] = "connected " + now.strftime("%H:%M:%S")
-            asyncio.run(stream(client, tok2sym, cache, stocks, indices))
+            futures = _futures_tokens(client, tok2sym, {str(t) for t in tokens.values()})
+            asyncio.run(stream(client, tok2sym, cache, stocks, indices, futures))
         except Exception as e:
             print("feed error, retrying in 15s:", repr(e), flush=True)
             STATUS["msg"] = "error: " + str(e)[:150]

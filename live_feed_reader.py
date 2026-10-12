@@ -109,7 +109,8 @@ def get_live_candles(symbol: str, interval: str = "5") -> pd.DataFrame:
     if _ts.dt.tz is not None:
         _ts = _ts.dt.tz_convert("Asia/Kolkata")
     _mins = _ts.dt.hour * 60 + _ts.dt.minute
-    _ok = (_ts.dt.weekday < 5) & (_mins >= 9 * 60 + 15) & (_mins < 15 * 60 + 15)
+    _end = 15 * 60 + 40 if symbol.strip().upper() in ("NIFTY", "BANKNIFTY") else 15 * 60 + 15  # index futures trade to 15:40
+    _ok = (_ts.dt.weekday < 5) & (_mins >= 9 * 60 + 15) & (_mins < _end)
     df = df[_ok.values].reset_index(drop=True)
     if df.empty:
         return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume", "oi", "date"])
