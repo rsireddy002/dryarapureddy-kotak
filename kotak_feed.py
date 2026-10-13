@@ -101,6 +101,39 @@ def _futures_tokens(client, tok2sym, cm_tokens):
     return out
 
 
+def _seed_today(client, tok2sym, cm_tokens, fut_map):
+    """After a restart during the session, rebuild today's finished 5-min (and 15-min) candles from
+    Kotak history so charts keep the whole day. Runs in its own thread next to the live stream,
+    never overwrites bars the stream already built, never raises. NIFTY/BANKNIFTY futures first."""
+    try:
+        import kotak_history
+        from candle_aggregator import bucket_start
+        now = datetime.now(IST)
+        mins = now.hour * 60 + now.minute
+        if now.weekday() >= 5 or mins < 9 * 60 + 25 or mins > 15 * 60 + 45:
+            return
+        cutoff = bucket_start(now, 300)
+        targets = [(s, "nse_fo", str(t)) for s, t in fut_map.items()]
+        targets += [(s, "nse_cm", str(t)) for s, t in cm_tokens.items() if s not in fut_map]
+        done = bars_total = 0
+        for sym, seg, tok in targets:
+            try:
+                df = kotak_history.fetch_frame(client, tok, "5min", 1, retries=1, seg=seg)
+                if df.empty:
+                    continue
+                df = df[df["date"] == now.date()]
+                bars = [{"timestamp": r.timestamp.to_pydatetime().replace(tzinfo=IST), "open": float(r.open),
+                         "high": float(r.high), "low": float(r.low), "close": float(r.close),
+                         "volume": float(r.volume)} for r in df.itertuples()]
+                bars_total += agg.seed_bars(sym, bars, before=cutoff)
+                done += 1
+            except Exception as e:
+                print("seed", sym, "failed:", repr(e)[:80], flush=True)
+        print(f"seeded today's candles: {done} symbols, {bars_total} bars", flush=True)
+    except Exception as e:
+        print("seed failed:", repr(e)[:120], flush=True)
+
+
 async def stream(client, tok2sym, cache, stocks, indices, futures=()):
     async with client.create_websocket() as ws:
         await ws.subscribe_scrips(stocks)
@@ -162,6 +195,12 @@ def main(embedded=False):
             print("logged in", now.isoformat(), flush=True)
             STATUS["msg"] = "connected " + now.strftime("%H:%M:%S")
             futures = _futures_tokens(client, tok2sym, {str(t) for t in tokens.values()})
+            try:
+                import kotak_history as _kh
+                _fm = _kh.resolve_index_futures(client)
+            except Exception:
+                _fm = {}
+            threading.Thread(target=_seed_today, args=(client, tok2sym, tokens, _fm), daemon=True, name="seed-today").start()
             asyncio.run(stream(client, tok2sym, cache, stocks, indices, futures))
         except Exception as e:
             print("feed error, retrying in 15s:", repr(e), flush=True)

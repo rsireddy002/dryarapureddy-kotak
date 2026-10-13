@@ -121,6 +121,41 @@ class CandleAggregator:
                     bar["close"] = ltp
                     bar["volume"] += vol_delta
 
+    def seed_bars(self, symbol, bars5, before=None):
+        """Backfill finished 5-min bars (e.g. rebuilt from the broker's history after a restart).
+        bars5: list of dicts with tz-aware "timestamp" plus open/high/low/close/volume.
+        Only fills buckets that are still empty, so bars built from live ticks are never overwritten.
+        Bars starting at or after `before` are skipped. 5-min bars go in as given; 15-min bars are
+        derived from them (1-min bars cannot be rebuilt). Returns the number of 5-min bars added."""
+        added = 0
+        with self._lock:
+            state = self._data.setdefault(
+                symbol, {"bars": {bs: {} for bs in self.bar_seconds_list}, "last_cum_volume": None},
+            )
+            groups = {}
+            for b in sorted(bars5, key=lambda x: x["timestamp"]):
+                ts = b["timestamp"]
+                if before is not None and ts >= before:
+                    continue
+                if 300 in self.bar_seconds_list:
+                    key = bucket_start(ts, 300).isoformat()
+                    if key not in state["bars"][300]:
+                        state["bars"][300][key] = {"timestamp": bucket_start(ts, 300), "open": b["open"],
+                                                   "high": b["high"], "low": b["low"], "close": b["close"],
+                                                   "volume": b["volume"]}
+                        added += 1
+                if 900 in self.bar_seconds_list:
+                    groups.setdefault(bucket_start(ts, 900), []).append(b)
+            for start, rows in groups.items():
+                key = start.isoformat()
+                if key in state["bars"][900]:
+                    continue
+                state["bars"][900][key] = {
+                    "timestamp": start, "open": rows[0]["open"], "high": max(r["high"] for r in rows),
+                    "low": min(r["low"] for r in rows), "close": rows[-1]["close"],
+                    "volume": sum(r["volume"] for r in rows)}
+        return added
+
     def get_candles(self, symbol, bar_seconds=BAR_SECONDS):
         """Returns this symbol's bars so far today at the given bar
         length, sorted oldest-first, as a list of dicts -- easy to hand
