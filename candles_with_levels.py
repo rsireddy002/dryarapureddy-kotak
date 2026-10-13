@@ -614,8 +614,10 @@ def build_cvd_chart(df, height=100, compact=False, x_range=None):
     # never render wider than their corresponding candle regardless of
     # how the x-axis range is scaled
     if len(df) > 1:
-        interval_ms = df["timestamp"].diff().dropna().dt.total_seconds().median() * 1000
-        bar_width_ms = interval_ms * 0.8
+        _gaps = df["timestamp"].drop_duplicates().sort_values().diff().dropna().dt.total_seconds()
+        _gaps = _gaps[_gaps > 0]
+        # never 0: duplicate timestamps used to make the median gap 0 and the bars hairlines
+        bar_width_ms = (_gaps.median() * 1000 * 0.8) if len(_gaps) else None
     else:
         bar_width_ms = None
 

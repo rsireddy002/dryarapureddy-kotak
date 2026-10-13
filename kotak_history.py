@@ -119,6 +119,19 @@ def _timed(fn, timeout=40):
     return box.get("v")
 
 
+def _dedupe_rows(rows):
+    """Kotak can return the same bar twice; keep one row per timestamp (the last), in time order.
+    Duplicates made the CVD bars zero-width (median bar gap 0) and doubled their volumes."""
+    seen = {}
+    for r in rows:
+        seen[str(r[0])] = r
+    return [seen[k] for k in sorted(seen)]
+
+
+def _dedupe_df(df):
+    return df.drop_duplicates("timestamp", keep="last").reset_index(drop=True) if "timestamp" in df else df
+
+
 def _candles_from(resp):
     if isinstance(resp, dict) and isinstance(resp.get("data"), dict):
         return resp["data"].get("candles") or []
@@ -144,7 +157,7 @@ def _refresh(client, tokens):
                 STATUS["msg"] = f"history: {sym} retry ({repr(e)[:60]})"
                 time.sleep(15)
         if rows:
-            out["data"][sym] = rows
+            out["data"][sym] = _dedupe_rows(rows)
         STATUS["msg"] = f"history: fetching {i + 1}/{len(syms)} (last {sym}: {len(rows)} rows, ok={len(out['data'])})"
         if (i + 1) % 25 == 0:  # partial save so charts fill in as we go
             try:
@@ -184,7 +197,8 @@ def get_candles(symbol, interval=5):
         return pd.DataFrame(columns=cols)
     df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
     df["timestamp"] = pd.to_datetime(df["timestamp"])
-    df = _session_only(df.sort_values("timestamp").reset_index(drop=True), (symbol or "").strip().upper() in FUT_SYMBOLS)
+    df = _dedupe_df(df.sort_values("timestamp"))
+    df = _session_only(df.reset_index(drop=True), (symbol or "").strip().upper() in FUT_SYMBOLS)
     if df.empty:
         return pd.DataFrame(columns=cols)
     df["date"] = df["timestamp"].dt.date
@@ -207,7 +221,7 @@ def get_history(symbol, days=7):
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df["oi"] = 0
     df["date"] = df["timestamp"].dt.date
-    return _session_only(df.sort_values("timestamp").reset_index(drop=True), (symbol or "").strip().upper() in FUT_SYMBOLS)
+    return _session_only(_dedupe_df(df.sort_values("timestamp")).reset_index(drop=True), (symbol or "").strip().upper() in FUT_SYMBOLS)
 
 
 def diag(sample="HDFCBANK"):
@@ -242,7 +256,7 @@ def fetch_frame(client, token, interval, days, retries=3, seg="nse_cm"):
         return pd.DataFrame()
     df = pd.DataFrame([r[:6] for r in rows], columns=["timestamp", "open", "high", "low", "close", "volume"])
     df["timestamp"] = pd.to_datetime(df["timestamp"])
-    df = df.sort_values("timestamp").reset_index(drop=True)
+    df = _dedupe_df(df.sort_values("timestamp")).reset_index(drop=True)
     if interval != "D":
         df = _session_only(df, seg == "nse_fo")
     df["oi"] = 0
