@@ -1,17 +1,21 @@
-name: Scheduled Precompute
+name: Scheduled Precompute (Kotak)
 
 permissions:
   contents: write
 
 on:
-  # Nightly schedule disabled: this repo is Kotak-only; use the app's "Run Precompute" button.
-  # schedule:
-  #   - cron: "35 10 * * 1-5"
-  workflow_dispatch: {}  # lets you trigger it manually from the Actions tab too
+  schedule:
+    - cron: "0 11 * * 1-5"   # 16:30 IST, Mon-Fri, after the 15:30 close
+  workflow_dispatch: {}      # run it by hand from the Actions tab
+
+concurrency:
+  group: precompute
+  cancel-in-progress: false
 
 jobs:
   precompute:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: Checkout repo
         uses: actions/checkout@v5
@@ -22,19 +26,23 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install requests pandas numpy
+        run: pip install requests pandas numpy "kotakneoapi>=3.0.7" pyotp websocket-client protobuf httpx
 
-      - name: Run precompute
+      - name: Run Kotak precompute
         env:
-          UPSTOX_ANALYTICAL_TOKEN: ${{ secrets.UPSTOX_ANALYTICAL_TOKEN }}
-        run: python github_precompute.py
+          KOTAK_CONSUMER_KEY: ${{ secrets.KOTAK_CONSUMER_KEY }}
+          KOTAK_MOBILE: ${{ secrets.KOTAK_MOBILE }}
+          KOTAK_UCC: ${{ secrets.KOTAK_UCC }}
+          KOTAK_MPIN: ${{ secrets.KOTAK_MPIN }}
+          KOTAK_TOTP_SECRET: ${{ secrets.KOTAK_TOTP_SECRET }}
+        run: python github_precompute_kotak.py
 
       - name: Commit and push updated cache
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -f sahi_zones_cache.json
-          git diff --quiet --cached || git commit -m "Scheduled precompute: $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git diff --quiet --cached || git commit -m "Scheduled precompute (Kotak): $(date -u +'%Y-%m-%d %H:%M UTC')"
           for i in 1 2 3 4 5; do
             git pull --rebase -X theirs origin main || true
             git push && break
