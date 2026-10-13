@@ -2857,7 +2857,8 @@ if os.path.exists(CACHE_PATH):
 
     df = st.session_state.get("last_scan_df", pd.DataFrame())
     price_lookup = dict(zip(df["Symbol"], df["LTP"])) if not df.empty else {}
-    rvol_lookup = dict(zip(df["Symbol"], df["RVOL%"])) if not df.empty else {}
+    # NaN RVOL (no volume/average yet) becomes None: NaN is truthy, so `x or 0` kept it and round(NaN) raised ValueError
+    rvol_lookup = {s_: (None if pd.isna(v_) else v_) for s_, v_ in zip(df["Symbol"], df["RVOL%"])} if not df.empty else {}
     alert_log = st.session_state.get("alert_log") or load_alert_log()
 
     symbols_with_zones = [s for s in cache if cache[s].get("composite_zones") or cache[s].get("intraday_zones")]
@@ -3261,7 +3262,7 @@ if os.path.exists(CACHE_PATH):
                                 continue
                             _fk = (sym, str(grid_df["timestamp"].iloc[-1]) if "timestamp" in grid_df.columns else len(grid_df),
                                    len(grid_df), round(float(grid_df["close"].iloc[-1]), 2),
-                                   round(rvol_lookup.get(sym) or 0), bool(show_all_composite_zones), str(_lvl_per_side))
+                                   round(_rv_key if (_rv_key := rvol_lookup.get(sym)) is not None and _rv_key == _rv_key else 0), bool(show_all_composite_zones), str(_lvl_per_side))
                             _now_t = time.time()
                             _hit = _FIG_CACHE.get(_fk)
                             if _hit is not None and _now_t - _hit[0] <= _FIG_CACHE_TTL:
