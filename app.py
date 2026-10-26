@@ -71,6 +71,7 @@ from candles_with_levels import (
 )
 from ml_predict import predict_break_probability
 from live_feed_reader import get_live_candles
+from atr_levels import atr_cache_fields, atr_for_session, ATR_PERIOD
 from candle_aggregator import INTERVALS_SECONDS  # which intervals the live feed can serve ("1"/"5"/"15")
 
 # Force IPv4 for every outbound connection this process makes. Confirmed
@@ -194,6 +195,7 @@ TRIPLE_CROSS_LOG_PATH = "triple_cross_log.json"  # written by tick_paper_trader.
 # standalone version for the full explanation. Read-only here, no new
 # dependency: just os/json, both already used elsewhere in this file.
 
+SHOW_ATR = True        # daily ATR(14) dotted previous-close +/- ATR lines (set False to hide)
 DAILY_LOOKBACK_DAYS = 60         # needs enough history for RVOL_BASELINE_DAYS average --
                                   # was 30, but Upstox's historical-candle endpoint only
                                   # returns finalized/settled days (lags behind "now" by a
@@ -1199,6 +1201,7 @@ def run_precompute(token, progress_callback=None):
                 "zones_updated_at": now_ist().strftime("%Y-%m-%d %H:%M:%S"),
                 "composite_updated_at": now_ist().strftime("%Y-%m-%d %H:%M:%S"),
             }
+            cache[symbol].update(atr_cache_fields(daily_df))   # daily ATR(14) for the dotted lines
         except Exception as e:
             _warn_safe(f"{symbol}: precompute failed ({e}), skipping.")
         _sym_elapsed = time.time() - _sym_t0
@@ -3108,6 +3111,10 @@ if os.path.exists(CACHE_PATH):
                 chart_title = (f"{chart_symbol} - price with key levels (RVOL {chart_rvol:.0f}%)"
                                if chart_rvol is not None else f"{chart_symbol} - price with key levels")
                 _chart_prices = [chart_df["high"].max(), chart_df["low"].min()]
+                _atr_info = atr_for_session(c, _chart_session_date) if SHOW_ATR else None
+                if _atr_info:
+                    _atr_v, _atr_pc = _atr_info
+                    _chart_prices += [_atr_pc + _atr_v, _atr_pc - _atr_v]
                 for _cz in c.get("composite_zones", []):
                     try:
                         _chart_prices.append(float(_cz["price_mode"]))
@@ -3128,6 +3135,18 @@ if os.path.exists(CACHE_PATH):
                     ema_200=c.get("ema_200"),
                     y_range=_chart_y_range,
                 )
+                if SHOW_ATR:
+                    if _atr_info:
+                        _lp = float(chart_df["close"].iloc[-1])
+                        st.caption(f"ATR({ATR_PERIOD}) daily: {_atr_v:.2f} points ({_atr_v / _lp * 100:.2f}% of price), "
+                                   f"from daily candles before {_chart_session_date}. Dotted lines: previous close "
+                                   f"{_atr_pc:g} \u00b1 1 ATR (a typical day's range).")
+                        for _y, _t in ((_atr_pc + _atr_v, "prev close + ATR"), (_atr_pc - _atr_v, "prev close \u2212 ATR")):
+                            fig.add_hline(y=_y, line_dash="dot", line_color="#e0a336", line_width=1,
+                                          annotation_text=f"{_t} {_y:g}", annotation_position="top right",
+                                          annotation_font_size=9, annotation_font_color="#e0a336")
+                    else:
+                        st.caption("ATR n/a (shows after the next Precompute: needs enough completed daily candles).")
                 st.plotly_chart(fig, use_container_width=True)
 
                 cvd_fig = build_cvd_chart(chart_df, height=140, x_range=get_session_x_range(chart_df))
@@ -3397,6 +3416,29 @@ if os.path.exists(CACHE_PATH):
                                     for _old_k in [k for k, v in _FIG_CACHE.items() if _now_t - v[0] > _FIG_CACHE_TTL]:
                                         _FIG_CACHE.pop(_old_k, None)
                                 _FIG_CACHE[_fk] = (_now_t, fig, cvd_fig)
+                            if SHOW_ATR:
+                                # previous close +/- 1 daily ATR(14), on a copy so the cached fig stays clean
+                                try:
+                                    _ai = atr_for_session(c, grid_df["date"].max())
+                                    if _ai:
+                                        _av, _apc = _ai
+                                        _alp = float(grid_df["close"].iloc[-1])
+                                        fig = go.Figure(fig)
+                                        for _ay in (_apc + _av, _apc - _av):
+                                            fig.add_hline(y=_ay, line_dash="dot", line_color="#e0a336", line_width=1)
+                                        fig.add_annotation(xref="paper", yref="paper", x=0.99, y=0.97, xanchor="right",
+                                                           text=f"ATR {_av:.2f} ({_av / _alp * 100:.1f}%)", showarrow=False,
+                                                           font=dict(size=10, color="#e0a336"))
+                                        _yr = fig.layout.yaxis.range
+                                        if _yr is not None and len(_yr) == 2:
+                                            _ylo, _yhi = float(_yr[0]), float(_yr[1])
+                                            _pad = _alp * 0.002
+                                            for _ay in (_apc + _av, _apc - _av):
+                                                if abs(_ay - _alp) <= _alp * 0.06:
+                                                    _ylo, _yhi = min(_ylo, _ay - _pad), max(_yhi, _ay + _pad)
+                                            fig.update_yaxes(range=[_ylo, _yhi])
+                                except Exception:
+                                    pass
                             if marks and sym in marks:
                                 # vertical marker at the level-cross candle (copy, so the cached fig stays clean)
                                 try:

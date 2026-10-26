@@ -12,6 +12,7 @@ import time
 
 import kotak_feed
 import kotak_history
+from atr_levels import atr_cache_fields
 from github_precompute import (
     CACHE_PATH, COMPOSITE_LOOKBACK_DAYS, DAILY_LOOKBACK_DAYS, RVOL_BASELINE_DAYS,
     EQUITY_SYMBOLS, FUTURES_SYMBOLS, _atomic_json_dump, compute_composite_zones,
@@ -63,6 +64,7 @@ def main():
                 "ema_200": compute_ema_200(intra["close"].tolist()),
                 "last_signal": "-", "zones_updated_at": stamp, "composite_updated_at": stamp,
             }
+            cache[symbol].update(atr_cache_fields(daily))   # daily ATR(14) for the chart's dotted lines
             fresh += 1
             print(f"[{i + 1}/{len(symbols)}] {symbol}: ok")
         except Exception as e:
