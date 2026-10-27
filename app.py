@@ -3711,14 +3711,14 @@ if os.path.exists(CACHE_PATH):
             "zone on the other side (blank = open air). Time = the candle it happened; the same moment is marked on the charts. "
             "Needs a Precompute so the ATR is in the cache."
         )
-        if st.button("Scan for ATR crosses", key="atrx_load"):
-            st.session_state["atrx_on"] = True
-        if not st.session_state.get("atrx_on"):
-            st.info("Press the button to scan all stocks.")
-        else:
+        _ax_force = st.button("Rescan now", key="atrx_load")
+        # runs automatically when the tab body runs; result reused for 60 s so reruns stay cheap
+        _ax_cached = st.session_state.get("atrx_result")
+        if True:
             _ax_token = get_token()
             _rc_rows, _rj_rows, _ax_missing = [], [], 0
-            for _s in [s for s in symbols_with_zones if s in cache]:
+            _ax_fresh = (not _ax_force and _ax_cached and time.time() - _ax_cached["t"] < 60)
+            for _s in ([] if _ax_fresh else [s for s in symbols_with_zones if s in cache]):
                 _c = cache[_s]
                 try:
                     _df = get_today_candles(_s, _c["instrument_key"], _ax_token)
@@ -3737,6 +3737,11 @@ if os.path.exists(CACHE_PATH):
                     _rc_rows.append(_xs["reclaim"])
                 if _xs["reject"]:
                     _rj_rows.append(_xs["reject"])
+            if _ax_fresh:
+                _rc_rows, _rj_rows, _ax_missing = _ax_cached["rc"], _ax_cached["rj"], _ax_cached["missing"]
+            else:
+                st.session_state["atrx_result"] = {"t": time.time(), "rc": _rc_rows, "rj": _rj_rows, "missing": _ax_missing}
+            st.caption(f"Scanned {now_ist().strftime('%H:%M:%S')} IST; re-scans on the first refresh after 60 s, or press Rescan now.")
             if _ax_missing:
                 st.caption(f"{_ax_missing} stock(s) skipped (no candles or no ATR in the cache yet).")
             _xc1, _xc2 = st.columns(2)
