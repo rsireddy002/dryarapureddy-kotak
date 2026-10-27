@@ -64,6 +64,7 @@ from streamlit_autorefresh import st_autorefresh
 
 from hvn_lvn import build_volume_profile, find_hvn_lvn
 from sahi_style_key_levels import sahi_style_key_levels
+from atr_cross import add_cross_markers, scan_symbol as atr_cross_scan
 from zone_validation import cross_validated_zones, compute_zone_signal, compute_cvd_zone_signal
 from candles_with_levels import (
     plot_candles_with_zones, build_cvd_chart, compute_cumulative_volume_delta,
@@ -2960,8 +2961,8 @@ if os.path.exists(CACHE_PATH):
 
     # Today's session / Paper-Real trade mode removed (not in use)
 
-    tab_scanner, tab_levels, tab_chart, tab_sectors, tab_rvol, tab_breaks, tab_trend = st.tabs(
-        ["Scanner", "Key Levels", "Chart", "Sectors", "By RVOL", "Level Breaks", "Above/Below VWAP"]
+    tab_scanner, tab_levels, tab_chart, tab_sectors, tab_rvol, tab_breaks, tab_trend, tab_atrx = st.tabs(
+        ["Scanner", "Key Levels", "Chart", "Sectors", "By RVOL", "Level Breaks", "Above/Below VWAP", "ATR Cross"]
     )
 
     if False:  # Dashboard tab (paper PnL) removed -- not in use
@@ -3145,6 +3146,7 @@ if os.path.exists(CACHE_PATH):
                             fig.add_hline(y=_y, line_dash="dot", line_color="#e0a336", line_width=1,
                                           annotation_text=f"{_t} {_y:g}", annotation_position="top right",
                                           annotation_font_size=9, annotation_font_color="#e0a336")
+                        add_cross_markers(fig, chart_df, _atr_info)
                     else:
                         st.caption("ATR n/a (shows after the next Precompute: needs enough completed daily candles).")
                 st.plotly_chart(fig, use_container_width=True)
@@ -3426,6 +3428,7 @@ if os.path.exists(CACHE_PATH):
                                         fig = go.Figure(fig)
                                         for _ay in (_apc + _av, _apc - _av):
                                             fig.add_hline(y=_ay, line_dash="dot", line_color="#e0a336", line_width=1)
+                                        add_cross_markers(fig, grid_df, _ai, compact=True)
                                         fig.add_annotation(xref="paper", yref="paper", x=0.99, y=0.97, xanchor="right",
                                                            text=f"ATR {_av:.2f} ({_av / _alp * 100:.1f}%)", showarrow=False,
                                                            font=dict(size=10, color="#e0a336"))
@@ -3699,6 +3702,58 @@ if os.path.exists(CACHE_PATH):
             if not _lb_dn:
                 st.caption("None right now.")
             _lb_render(_lb_dn, "down", "lbdn")
+
+    with tab_atrx:
+        st.caption(
+            "Stocks that crossed back through an ATR line today (previous close \u00b1 1 daily ATR), at a validated zone, with room. "
+            "RECLAIM: the low went under the lower line, a later candle closed back above it, a validated support zone sits "
+            "at that line. REJECT: the mirror at the upper line with resistance. Only rows with more than 1% room to the next "
+            "zone on the other side (blank = open air). Time = the candle it happened; the same moment is marked on the charts. "
+            "Needs a Precompute so the ATR is in the cache."
+        )
+        if st.button("Scan for ATR crosses", key="atrx_load"):
+            st.session_state["atrx_on"] = True
+        if not st.session_state.get("atrx_on"):
+            st.info("Press the button to scan all stocks.")
+        else:
+            _ax_token = get_token()
+            _rc_rows, _rj_rows, _ax_missing = [], [], 0
+            for _s in [s for s in symbols_with_zones if s in cache]:
+                _c = cache[_s]
+                try:
+                    _df = get_today_candles(_s, _c["instrument_key"], _ax_token)
+                except Exception:
+                    _df = None
+                if _df is None or _df.empty:
+                    _ax_missing += 1
+                    continue
+                _ai = atr_for_session(_c, _df["timestamp"].dt.date.max())
+                if not _ai:
+                    _ax_missing += 1
+                    continue
+                _xs = atr_cross_scan(_s, _df, _ai, cross_validated_zones(
+                    _c.get("composite_zones", []), _c.get("intraday_zones", []))[0])
+                if _xs["reclaim"]:
+                    _rc_rows.append(_xs["reclaim"])
+                if _xs["reject"]:
+                    _rj_rows.append(_xs["reject"])
+            if _ax_missing:
+                st.caption(f"{_ax_missing} stock(s) skipped (no candles or no ATR in the cache yet).")
+            _xc1, _xc2 = st.columns(2)
+            with _xc1:
+                st.markdown(f"**Lower-ATR reclaim at support ({len(_rc_rows)})**")
+                if _rc_rows:
+                    st.dataframe(pd.DataFrame(_rc_rows).sort_values("Room to run %", ascending=False, na_position="first"),
+                                 use_container_width=True, hide_index=True)
+                else:
+                    st.write("None right now.")
+            with _xc2:
+                st.markdown(f"**Upper-ATR reject at resistance ({len(_rj_rows)})**")
+                if _rj_rows:
+                    st.dataframe(pd.DataFrame(_rj_rows).sort_values("Room to fall %", ascending=False, na_position="first"),
+                                 use_container_width=True, hide_index=True)
+                else:
+                    st.write("None right now.")
 
     with tab_trend:
         st.caption(
