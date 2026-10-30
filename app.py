@@ -48,6 +48,7 @@ import os
 import re
 import json
 import socket
+import order_flow_views as ofv
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1981,6 +1982,10 @@ def run_live_scan(cache, token):
         if not symbol:
             continue
         c = cache[symbol]
+        try:
+            ofv.record_depth_snapshot(symbol, q)    # order-book depth history (no extra request)
+        except Exception:
+            pass
         ltp = q.get("last_price")
         vwap = q.get("average_price")
         today_volume = q.get("volume")
@@ -2297,6 +2302,19 @@ def merge_close_zones(zones, pct, prefer_modes=None):
             group = [z]
     out.append(_pick(group))
     return out
+
+
+def order_flow_dot(grid_df, symbol, zones=None, margin=2):
+    """One colour dot summarising the volume + order-book reading for a chart title: green when at least `margin`
+    more checks lean bullish than bearish, red for the reverse, white otherwise. Uses the candles the grid already
+    has (no extra request) and the depth snapshots kept in memory."""
+    try:
+        prof = ofv.candle_volume_profile(grid_df, 30)
+        rows = ofv.order_flow_read(prof, float(grid_df["close"].iloc[-1]), grid_df, ofv.depth_history(symbol), zones)
+        diff = sum(r["Leans"] == "bullish" for r in rows) - sum(r["Leans"] == "bearish" for r in rows)
+        return "\U0001F7E2" if diff >= margin else ("\U0001F534" if diff <= -margin else "\u26AA")
+    except Exception:
+        return ""
 
 
 def _pct_from_label_safe(label):
@@ -3274,6 +3292,7 @@ if os.path.exists(CACHE_PATH):
             # Chart settings live in the sidebar, away from the charts, so they are not touched by accident.
             with st.sidebar:
                 st.markdown("### \U0001F4CA Sector chart levels")
+                st.caption("Dot in each chart title = volume and order-book lean: \U0001F7E2 buying, \U0001F534 selling, \u26AA mixed.")
                 _lvl_per_side = st.select_slider(
                     "Levels shown per side (nearest to price)", options=[1, 2, 3, "All"],
                     value=2, key="levels_per_side",
@@ -3323,9 +3342,11 @@ if os.path.exists(CACHE_PATH):
                             if grid_df.empty:
                                 st.write(f"{sym}: no candle data yet.")
                                 continue
+                            _of_dot = order_flow_dot(grid_df, sym, cross_validated_zones(
+                                c.get("composite_zones", []), c.get("intraday_zones", []))[0])
                             _fk = (sym, str(grid_df["timestamp"].iloc[-1]) if "timestamp" in grid_df.columns else len(grid_df),
                                    len(grid_df), round(float(grid_df["close"].iloc[-1]), 2),
-                                   round(_rv_key if (_rv_key := rvol_lookup.get(sym)) is not None and _rv_key == _rv_key else 0), bool(show_all_composite_zones), str(_lvl_per_side), _merge_pct, bool(_grid_extras))
+                                   round(_rv_key if (_rv_key := rvol_lookup.get(sym)) is not None and _rv_key == _rv_key else 0), bool(show_all_composite_zones), str(_lvl_per_side), _merge_pct, bool(_grid_extras), _of_dot)
                             _now_t = time.time()
                             _hit = _FIG_CACHE.get(_fk)
                             if _hit is not None and _now_t - _hit[0] <= _FIG_CACHE_TTL:
@@ -3338,7 +3359,7 @@ if os.path.exists(CACHE_PATH):
                                     c.get("composite_zones", []), val_comp, grid_df
                                 )
                                 grid_rvol = rvol_lookup.get(sym)
-                                grid_title = f"{sym} (RVOL {grid_rvol:.0f}%)" if grid_rvol is not None else sym
+                                grid_title = (f"{_of_dot} " if _of_dot else "") + (f"{sym} (RVOL {grid_rvol:.0f}%)" if grid_rvol is not None else sym)
                                 _grid_last_close = float(grid_df["close"].iloc[-1])
                                 if show_all_composite_zones:
                                     # Best Setups wants every composite zone visible, however far,
