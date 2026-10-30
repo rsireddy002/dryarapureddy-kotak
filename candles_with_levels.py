@@ -97,7 +97,7 @@ def plot_candles_with_zones(df, composite_zones=None, intraday_zones=None,
                              validated_zones=None, title="Price with key levels",
                              show_vwap=True, x_range=None, height=500, compact=False,
                              tick_format=None, y_range=None, market_hours_breaks=False,
-                             event_markers=None, ml_risk_lookup=None, ema_200=None):
+                             event_markers=None, ml_risk_lookup=None, ema_200=None, show_first_close=True):
     """
     df: OHLC(V) dataframe with columns ['timestamp','open','high','low','close']
         and ideally 'volume' (needed for the VWAP line).
@@ -185,7 +185,7 @@ def plot_candles_with_zones(df, composite_zones=None, intraday_zones=None,
 
     # Straight line at the close of the first 5-minute candle (09:15-09:20)
     # of the session, running from that candle to the right edge.
-    _fc = _first_candle_close(df)
+    _fc = _first_candle_close(df) if show_first_close else None
     if _fc is not None:
         _fc_ts, _fc_close = _fc
         fig.add_trace(go.Scatter(

@@ -2273,6 +2273,32 @@ def run_live_scan(cache, token):
             support_reclaims, paper_trade_candidates, support_watch, resistance_watch)
 
 
+def merge_close_zones(zones, pct, prefer_modes=None):
+    """Collapse levels closer together than `pct` percent into one line: within each cluster keep a validated level
+    if there is one, otherwise the one with the biggest volume share. Declutters small grid charts."""
+    try:
+        zs = sorted(zones, key=lambda z: float(z["price_mode"]))
+    except (TypeError, ValueError, KeyError):
+        return zones
+    if not zs or not pct:
+        return zones
+    prefer_modes = prefer_modes or set()
+    out, group = [], [zs[0]]
+
+    def _pick(g):
+        return max(g, key=lambda z: (round(float(z["price_mode"]), 4) in prefer_modes, _pct_from_label_safe(z.get("label", ""))))
+
+    for z in zs[1:]:
+        anchor = float(group[0]["price_mode"])
+        if anchor > 0 and (float(z["price_mode"]) - anchor) / anchor * 100 <= pct:
+            group.append(z)
+        else:
+            out.append(_pick(group))
+            group = [z]
+    out.append(_pick(group))
+    return out
+
+
 def _pct_from_label_safe(label):
     m = re.search(r"[\d.]+", str(label))
     return float(m.group()) if m else 0.0
@@ -3245,10 +3271,26 @@ if os.path.exists(CACHE_PATH):
                 "View", ["One sector at a time", "Scroll through all sectors"],
                 horizontal=True, key="sector_view_mode",
             )
-            _lvl_per_side = st.select_slider(
-                "Levels shown per side (nearest to price)", options=[1, 2, 3, "All"],
-                value=2, key="levels_per_side",
-            )
+            # Chart settings live in the sidebar, away from the charts, so they are not touched by accident.
+            with st.sidebar:
+                st.markdown("### \U0001F4CA Sector chart levels")
+                _lvl_per_side = st.select_slider(
+                    "Levels shown per side (nearest to price)", options=[1, 2, 3, "All"],
+                    value=2, key="levels_per_side",
+                )
+                _merge_pct = st.select_slider(
+                    "Merge levels closer than (%)", options=[0, 0.3, 0.5, 0.75, 1.0],
+                    value=0.5, key="grid_merge_pct",
+                    help="Levels within this distance of each other are drawn as one line (the validated / strongest one). 0 = off.",
+                )
+                _grid_extras = st.checkbox(
+                    "Show ATR, EMA and first-candle lines", value=True, key="grid_extra_lines",
+                    help="Untick for a cleaner chart with only support and resistance.",
+                )
+                _sec_cols = st.select_slider(
+                    "Charts per row (Sectors tab)", options=[1, 2, 3, 4, 6, 8],
+                    value=2, key="sector_cols_per_row",
+                )
 
             def render_symbol_grid(symbols_list, token, key_prefix="sector", cols_per_row=2, show_all_composite_zones=False, lite=False, marks=None):
                 # 2 charts per row by default (4 was tried and reverted at user request), each an independent chart with
@@ -3283,7 +3325,7 @@ if os.path.exists(CACHE_PATH):
                                 continue
                             _fk = (sym, str(grid_df["timestamp"].iloc[-1]) if "timestamp" in grid_df.columns else len(grid_df),
                                    len(grid_df), round(float(grid_df["close"].iloc[-1]), 2),
-                                   round(_rv_key if (_rv_key := rvol_lookup.get(sym)) is not None and _rv_key == _rv_key else 0), bool(show_all_composite_zones), str(_lvl_per_side))
+                                   round(_rv_key if (_rv_key := rvol_lookup.get(sym)) is not None and _rv_key == _rv_key else 0), bool(show_all_composite_zones), str(_lvl_per_side), _merge_pct, bool(_grid_extras))
                             _now_t = time.time()
                             _hit = _FIG_CACHE.get(_fk)
                             if _hit is not None and _now_t - _hit[0] <= _FIG_CACHE_TTL:
@@ -3360,6 +3402,14 @@ if os.path.exists(CACHE_PATH):
                                             _far_notes.append((_side, float(_pick["price_mode"]), _d))
                                 except (TypeError, ValueError, KeyError, IndexError, ZeroDivisionError):
                                     pass
+                                if _merge_pct and not show_all_composite_zones:
+                                    try:
+                                        _vmodes = {round(float(z["price_mode"]), 4) for z in val_comp}
+                                        _grid_zones_to_draw = merge_close_zones(_grid_zones_to_draw, float(_merge_pct), _vmodes)
+                                        _mm = {round(float(z["price_mode"]), 4) for z in _grid_zones_to_draw}
+                                        val_comp = [z for z in val_comp if round(float(z["price_mode"]), 4) in _mm]
+                                    except (TypeError, ValueError, KeyError):
+                                        pass
                                 # Declutter: keep only the N nearest zones on each side of price
                                 # (the open-based support/resistance added above is always kept).
                                 if _lvl_per_side != "All" and not show_all_composite_zones:
@@ -3401,7 +3451,8 @@ if os.path.exists(CACHE_PATH):
                                     compact=True,
                                     x_range=get_session_x_range(grid_df),
                                     ml_risk_lookup=ml_lookup,
-                                    ema_200=c.get("ema_200"),
+                                    ema_200=c.get("ema_200") if _grid_extras else None,
+                                    show_first_close=bool(_grid_extras),
                                     y_range=_grid_y_range,
                                 )
                                 for _side, _px, _d in _far_notes:
@@ -3418,7 +3469,7 @@ if os.path.exists(CACHE_PATH):
                                     for _old_k in [k for k, v in _FIG_CACHE.items() if _now_t - v[0] > _FIG_CACHE_TTL]:
                                         _FIG_CACHE.pop(_old_k, None)
                                 _FIG_CACHE[_fk] = (_now_t, fig, cvd_fig)
-                            if SHOW_ATR:
+                            if SHOW_ATR and _grid_extras:
                                 # previous close +/- 1 daily ATR(14), on a copy so the cached fig stays clean
                                 try:
                                     _ai = atr_for_session(c, grid_df["date"].max())
@@ -3559,7 +3610,7 @@ if os.path.exists(CACHE_PATH):
                     st.write("No symbols with zones in this sector yet.")
                 else:
                     token = get_token()
-                    render_symbol_grid(sector_symbols, token)
+                    render_symbol_grid(sector_symbols, token, cols_per_row=_sec_cols)
 
             else:
                 total_symbols = len([s for s in symbols_with_zones if s in SECTOR_MAP])
@@ -3581,7 +3632,7 @@ if os.path.exists(CACHE_PATH):
                 _sel = st.radio("Sector group", _tab_titles, horizontal=True, key="sector_group_sel",
                                 label_visibility="collapsed")
                 if _idx_syms and _sel == _tab_titles[0]:
-                    render_symbol_grid(_idx_syms, token, key_prefix="idx", lite=True)
+                    render_symbol_grid(_idx_syms, token, key_prefix="idx", lite=True, cols_per_row=_sec_cols)
                 else:
                     _gi = _labels.index(_sel) if _sel in _labels else 0
                     for sector in _groups[_gi]:
@@ -3589,7 +3640,7 @@ if os.path.exists(CACHE_PATH):
                         if not sector_symbols:
                             continue
                         st.markdown(f"## {sector}")
-                        render_symbol_grid(sector_symbols, token, lite=True)
+                        render_symbol_grid(sector_symbols, token, lite=True, cols_per_row=_sec_cols)
                         st.divider()
 
     with tab_breaks:
