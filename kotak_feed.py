@@ -116,19 +116,31 @@ def _seed_today(client, tok2sym, cm_tokens, fut_map):
         targets = [(s, "nse_fo", str(t)) for s, t in fut_map.items()]
         targets += [(s, "nse_cm", str(t)) for s, t in cm_tokens.items() if s not in fut_map]
         done = bars_total = 0
-        for sym, seg, tok in targets:
-            try:
-                df = kotak_history.fetch_frame(client, tok, "5min", 1, retries=1, seg=seg)
-                if df.empty:
-                    continue
-                df = df[df["date"] == now.date()]
-                bars = [{"timestamp": r.timestamp.to_pydatetime().replace(tzinfo=IST), "open": float(r.open),
-                         "high": float(r.high), "low": float(r.low), "close": float(r.close),
-                         "volume": float(r.volume)} for r in df.itertuples()]
-                bars_total += agg.seed_bars(sym, bars, before=cutoff)
-                done += 1
-            except Exception as e:
-                print("seed", sym, "failed:", repr(e)[:80], flush=True)
+        # Several passes: a symbol whose history call failed or came back empty (rate limit, slow reply) is retried
+        # instead of being left to show only the candles built since this app started.
+        remaining = list(targets)
+        for _pass in range(4):
+            failed = []
+            for sym, seg, tok in remaining:
+                try:
+                    df = kotak_history.fetch_frame(client, tok, "5min", 1, retries=1 if _pass == 0 else 2, seg=seg)
+                    if df.empty:
+                        failed.append((sym, seg, tok))
+                        continue
+                    df = df[df["date"] == now.date()]
+                    bars = [{"timestamp": r.timestamp.to_pydatetime().replace(tzinfo=IST), "open": float(r.open),
+                             "high": float(r.high), "low": float(r.low), "close": float(r.close),
+                             "volume": float(r.volume)} for r in df.itertuples()]
+                    bars_total += agg.seed_bars(sym, bars, before=cutoff)
+                    done += 1
+                except Exception as e:
+                    print("seed", sym, "failed:", repr(e)[:80], flush=True)
+                    failed.append((sym, seg, tok))
+            print(f"seed pass {_pass + 1}: {len(remaining) - len(failed)} ok, {len(failed)} to retry", flush=True)
+            remaining = failed
+            if not remaining:
+                break
+            time.sleep(20)
         print(f"seeded today's candles: {done} symbols, {bars_total} bars", flush=True)
     except Exception as e:
         print("seed failed:", repr(e)[:120], flush=True)
